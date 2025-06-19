@@ -1,0 +1,135 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Función del modelo SIR con control no lineal
+def SIR_control(S, I, R, u):
+    sigma = u / (K + u)
+    beta_eff = beta * (1 - sigma)
+    dS = -beta_eff * S * I
+    dI = beta_eff * S * I - gamma * I
+    dR = gamma * I
+    return dS, dI, dR
+
+# Funciones de coestados
+def coestados(S, I, R, lambdaS, lambdaI, lambdaR, u):
+    beta_eff = beta * (K / (K + u))
+    d_lambdaS = beta_eff * I * (lambdaS - lambdaI)
+    d_lambdaI = -C_I + beta_eff * S * (lambdaS - lambdaI) + gamma * (lambdaI - lambdaR)
+    d_lambdaR = 0.0
+    return d_lambdaS, d_lambdaI, d_lambdaR
+
+# Condición de optimalidad (raíz real no negativa de la cúbica)
+def optimalidad(S, I, lambdaS, lambdaI):
+    # Constante Cc
+    Cc = (beta * S * I * K * (lambdaS - lambdaI)) / (2.0 * C_u)
+    if Cc <= 0.0:
+        return 0.0
+    # Coeficientes del polinomio u^3 + 2K u^2 + K^2 u - Cc = 0
+    coeffs = [1.0, 2.0 * K, K**2, -Cc]
+    roots = np.roots(coeffs)
+    real_roots = [r.real for r in roots if np.isreal(r) and r.real >= 0.0]
+    return min(real_roots) if real_roots else 0.0
+
+# Parámetros del modelo
+beta = 0.231964
+gamma = 0.441615
+C_I = 10.0
+C_u = 1.0
+K = 1.0
+T_total = 60.0
+dt = 0.5
+N = int(T_total / dt)
+
+# Condiciones iniciales
+S0, I0, R0 = 0.876285, 0.123715, 0.0
+
+# Horizonte de control
+inicio_control = 3.0
+duracion_control = T_total - inicio_control
+fin_control = inicio_control + duracion_control
+N_H = int(duracion_control / dt)
+
+# Inicializar listas
+S, I, R, u = [S0], [I0], [R0], []
+I_semanal, u_semanal, T_semanal = [], [], []
+
+# Simulación principal
+for t_step in range(N):
+    tiempo_actual = t_step * dt
+    S_prev, I_prev, R_prev = S[-1], I[-1], R[-1]
+
+    if inicio_control <= tiempo_actual < fin_control:
+        # Prealocar arrays para horizonte errante
+        S_h = np.zeros(N_H)
+        I_h = np.zeros(N_H)
+        R_h = np.zeros(N_H)
+        u_h = np.ones(N_H) * 0.5
+        lambdaS = np.zeros(N_H)
+        lambdaI = np.zeros(N_H)
+        lambdaR = np.zeros(N_H)
+        # Condiciones inicial y terminal en horizonte
+        S_h[0], I_h[0], R_h[0] = S_prev, I_prev, R_prev
+        lambdaS[-1], lambdaI[-1], lambdaR[-1] = 0.0, 10.0, 0.0
+
+        # Avance y retroceso (30 iteraciones)
+        for _ in range(30):
+            # Avance de estados
+            for k in range(N_H - 1):
+                dS_, dI_, dR_ = SIR_control(S_h[k], I_h[k], R_h[k], u_h[k])
+                S_h[k+1] = S_h[k] + dt * dS_
+                I_h[k+1] = I_h[k] + dt * dI_
+                R_h[k+1] = R_h[k] + dt * dR_
+            # Retroceso de coestados
+            for k in range(N_H - 2, -1, -1):
+                d_lS, d_lI, d_lR = coestados(
+                    S_h[k], I_h[k], R_h[k],
+                    lambdaS[k+1], lambdaI[k+1], lambdaR[k+1],
+                    u_h[k]
+                )
+                lambdaS[k] = lambdaS[k+1] + dt * d_lS
+                lambdaI[k] = lambdaI[k+1] + dt * d_lI
+                lambdaR[k] = lambdaR[k+1] + dt * d_lR
+            # Cálculo del control óptimo
+            for k in range(N_H):
+                u_h[k] = optimalidad(S_h[k], I_h[k], lambdaS[k], lambdaI[k])
+
+        u_aplicado = u_h[0]
+    else:
+        u_aplicado = 0.0
+
+    # Avanzar el modelo global
+    dS_, dI_, dR_ = SIR_control(S_prev, I_prev, R_prev, u_aplicado)
+    S.append(S_prev + dt * dS_)
+    I.append(I_prev + dt * dI_)
+    R.append(R_prev + dt * dR_)
+    u.append(u_aplicado)
+
+    # Guardar dinámica semanal
+    if inicio_control <= tiempo_actual < inicio_control + 7.5:
+        I_semanal.append(I_prev)
+        u_semanal.append(u_aplicado)
+        T_semanal.append(tiempo_actual)
+
+# Visualización
+t = np.arange(len(S)) * dt
+fig, axs = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+# Escala libre
+axs[0].plot(t, S, label='Susceptibles')
+axs[0].plot(t, I, label='Infectados')
+axs[0].plot(t, R, label='Recuperados')
+axs[0].plot(t[:-1], u, '--', label='Control óptimo')
+axs[0].axvspan(inicio_control, inicio_control + 7, alpha=0.2, color='gray', label='7 días control')
+axs[0].set_ylabel('Población')
+axs[0].set_title('SIR con control óptimo (escala libre)')
+axs[0].legend()
+# Escala [0,1]
+axs[1].plot(t, S, label='Susceptibles')
+axs[1].plot(t, I, label='Infectados')
+axs[1].plot(t, R, label='Recuperados')
+axs[1].plot(t[:-1], u, '--', label='Control óptimo')
+axs[1].axvspan(inicio_control, inicio_control + 7, alpha=0.2, color='gray')
+axs[1].set_ylim(0, 1)
+axs[1].set_xlabel('Días')
+axs[1].set_ylabel('Población')
+axs[1].set_title('SIR con control óptimo (limitado a [0,1])')
+axs[1].legend()
