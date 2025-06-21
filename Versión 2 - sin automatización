@@ -1,0 +1,135 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Función del modelo SIR con control no lineal
+def SIR_control(S, I, R, u):
+    beta_eff = beta * (1 - u)
+    dS = -beta_eff * S * I
+    dI = beta_eff * S * I - gamma * I
+    dR = gamma * I
+    return dS, dI, dR
+
+# Funciones de coestados
+def coestados(S, I, R, lambdaS, lambdaI, lambdaR, u):
+    beta_eff = beta * (1 - u)
+    d_lambdaS = beta_eff * I * (lambdaS - lambdaI)
+    d_lambdaI = -C_I + beta_eff * S * (lambdaS - lambdaI) + gamma * (lambdaI - lambdaR)
+    d_lambdaR = 0.0
+    return d_lambdaS, d_lambdaI, d_lambdaR
+
+# Condición de optimalidad
+def optimalidad(S, I, lambdaS, lambdaI, tol=1e-15):
+  # Polinomio de optimalidad
+  A = beta * S * I * (lambdaS - lambdaI)
+  p = lambda u: -u**3 + 3*u**2 + ((2 * C_u)/A - 3) * u + 1
+  dp = lambda u: -3*u**2 + 6*u + (2 * C_u)/A - 3
+
+  if A >= 0:
+    return 0.0
+  else:
+    u = 0.5
+    for _ in range(100):
+      f = p(u)
+      df = dp(u)
+      u_nueva = u - f/df
+      u_nueva = np.clip(u_nueva, 1e-8, 1 - 1e-8)
+      if abs(u_nueva - u) < tol:
+        break
+      u = u_nueva
+  return u
+
+# Parámetros del modelo
+beta = 0.781676
+gamma = 0.494375
+C_I = 5.0
+C_u = 5.0
+K = 1.0
+T_total = 60.0
+dt = 0.5
+N = int(T_total / dt)
+
+# Condiciones iniciales
+S0, I0, R0 = 0.41157, 0.58843, 0.0
+
+# Horizonte de control
+inicio_control = 3.0
+duracion_control = T_total - inicio_control
+fin_control = inicio_control + duracion_control
+N_H = int(duracion_control / dt)
+
+# Inicializar listas
+S, I, R, u = [S0], [I0], [R0], []
+I_semanal, u_semanal, T_semanal = [], [], []
+
+# Simulación principal
+for t_step in range(N):
+    tiempo_actual = t_step * dt
+    S_prev, I_prev, R_prev = S[-1], I[-1], R[-1]
+
+    if inicio_control <= tiempo_actual < fin_control:
+        # Prealocar arrays para horizonte errante
+        S_h = np.zeros(N_H)
+        I_h = np.zeros(N_H)
+        R_h = np.zeros(N_H)
+        u_h = np.ones(N_H) * 0.5
+        lambdaS = np.zeros(N_H)
+        lambdaI = np.zeros(N_H)
+        lambdaR = np.zeros(N_H)
+
+        # Condiciones inicial y terminal en horizonte
+        S_h[0], I_h[0], R_h[0] = S_prev, I_prev, R_prev
+        lambdaS[-1], lambdaI[-1], lambdaR[-1] = 0.0, 30.0, 0.0
+
+        # Avance y retroceso (30 iteraciones)
+        for _ in range(50):
+            # Avance de estados
+            for k in range(N_H - 1):
+                dS_, dI_, dR_ = SIR_control(S_h[k], I_h[k], R_h[k], u_h[k])
+                S_h[k+1] = S_h[k] + dt * dS_
+                I_h[k+1] = I_h[k] + dt * dI_
+                R_h[k+1] = R_h[k] + dt * dR_
+            # Retroceso de coestados
+            for k in range(N_H - 2, -1, -1):
+                d_lS, d_lI, d_lR = coestados(
+                    S_h[k], I_h[k], R_h[k],
+                    lambdaS[k+1], lambdaI[k+1], lambdaR[k+1],
+                    u_h[k]
+                )
+                lambdaS[k] = lambdaS[k+1] + dt * d_lS
+                lambdaI[k] = lambdaI[k+1] + dt * d_lI
+                lambdaR[k] = lambdaR[k+1] + dt * d_lR
+            # Cálculo del control óptimo
+            for k in range(N_H):
+                u_h[k] = optimalidad(S_h[k], I_h[k], lambdaS[k], lambdaI[k])
+
+        u_aplicado = u_h[0]
+    else:
+        u_aplicado = 0.0
+
+    # Avanzar el modelo global
+    dS_, dI_, dR_ = SIR_control(S_prev, I_prev, R_prev, u_aplicado)
+    S.append(S_prev + dt * dS_)
+    I.append(I_prev + dt * dI_)
+    R.append(R_prev + dt * dR_)
+    u.append(u_aplicado)
+
+    # Guardar dinámica semanal
+    if inicio_control <= tiempo_actual < inicio_control + 7.5:
+        I_semanal.append(I_prev)
+        u_semanal.append(u_aplicado)
+        T_semanal.append(tiempo_actual)
+
+# Visualización
+t = np.arange(len(S)) * dt
+
+# Escala libre
+plt.figure(figsize = (12,6))
+plt.plot(t, S, label='Susceptibles')
+plt.plot(t, I, label='Infectados')
+plt.plot(t, R, label='Recuperados')
+plt.plot(t[:-1], u, '--', label='Control óptimo')
+plt.axvspan(inicio_control, inicio_control + 7, alpha=0.2, color='gray', label='7 días control')
+plt.ylabel('Población')
+plt.title('SIR con control óptimo (escala libre)')
+plt.legend()
+plt.show()
