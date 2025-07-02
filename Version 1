@@ -3,8 +3,7 @@ import matplotlib.pyplot as plt
 
 # Función del modelo SIR con control no lineal
 def SIR_control(S, I, R, u):
-    sigma = u / (K + u)
-    beta_eff = beta * (1 - sigma)
+    beta_eff = beta * (1 - u)
     dS = -beta_eff * S * I
     dI = beta_eff * S * I - gamma * I
     dR = gamma * I
@@ -12,36 +11,45 @@ def SIR_control(S, I, R, u):
 
 # Funciones de coestados
 def coestados(S, I, R, lambdaS, lambdaI, lambdaR, u):
-    beta_eff = beta * (K / (K + u))
+    beta_eff = beta * (1 - u)
     d_lambdaS = beta_eff * I * (lambdaS - lambdaI)
     d_lambdaI = -C_I + beta_eff * S * (lambdaS - lambdaI) + gamma * (lambdaI - lambdaR)
     d_lambdaR = 0.0
     return d_lambdaS, d_lambdaI, d_lambdaR
 
-# Condición de optimalidad (raíz real no negativa de la cúbica)
-def optimalidad(S, I, lambdaS, lambdaI):
-    # Constante Cc
-    Cc = (beta * S * I * K * (lambdaS - lambdaI)) / (2.0 * C_u)
-    if Cc <= 0.0:
-        return 0.0
-    # Coeficientes del polinomio u^3 + 2K u^2 + K^2 u - Cc = 0
-    coeffs = [1.0, 2.0 * K, K**2, -Cc]
-    roots = np.roots(coeffs)
-    real_roots = [r.real for r in roots if np.isreal(r) and r.real >= 0.0]
-    return min(real_roots) if real_roots else 0.0
+# Condición de optimalidad
+def optimalidad(S, I, lambdaS, lambdaI, tol=1e-15):
+  # Polinomio de optimalidad
+  A = beta * S * I * (lambdaS - lambdaI)
+  p = lambda u: -u**3 + 3*u**2 + ((2 * C_u)/A - 3) * u + 1
+  dp = lambda u: -3*u**2 + 6*u + (2 * C_u)/A - 3
+
+  if A >= 0:
+    return 0.0
+  else:
+    u = 0.5
+    for _ in range(100):
+      f = p(u)
+      df = dp(u)
+      u_nueva = u - f/df
+      u_nueva = np.clip(u_nueva, 1e-8, 1 - 1e-8)
+      if abs(u_nueva - u) < tol:
+        break
+      u = u_nueva
+  return u
 
 # Parámetros del modelo
-beta = 0.231964
-gamma = 0.441615
-C_I = 10.0
-C_u = 1.0
+beta = 0.781676
+gamma = 0.494375
+C_I = 5.0
+C_u = 5.0
 K = 1.0
 T_total = 60.0
 dt = 0.5
 N = int(T_total / dt)
 
 # Condiciones iniciales
-S0, I0, R0 = 0.876285, 0.123715, 0.0
+S0, I0, R0 = 0.41157, 0.58843, 0.0
 
 # Horizonte de control
 inicio_control = 3.0
@@ -67,12 +75,13 @@ for t_step in range(N):
         lambdaS = np.zeros(N_H)
         lambdaI = np.zeros(N_H)
         lambdaR = np.zeros(N_H)
+
         # Condiciones inicial y terminal en horizonte
         S_h[0], I_h[0], R_h[0] = S_prev, I_prev, R_prev
-        lambdaS[-1], lambdaI[-1], lambdaR[-1] = 0.0, 10.0, 0.0
+        lambdaS[-1], lambdaI[-1], lambdaR[-1] = 0.0, 30.0, 0.0
 
         # Avance y retroceso (30 iteraciones)
-        for _ in range(30):
+        for _ in range(50):
             # Avance de estados
             for k in range(N_H - 1):
                 dS_, dI_, dR_ = SIR_control(S_h[k], I_h[k], R_h[k], u_h[k])
@@ -112,24 +121,15 @@ for t_step in range(N):
 
 # Visualización
 t = np.arange(len(S)) * dt
-fig, axs = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+
 # Escala libre
-axs[0].plot(t, S, label='Susceptibles')
-axs[0].plot(t, I, label='Infectados')
-axs[0].plot(t, R, label='Recuperados')
-axs[0].plot(t[:-1], u, '--', label='Control óptimo')
-axs[0].axvspan(inicio_control, inicio_control + 7, alpha=0.2, color='gray', label='7 días control')
-axs[0].set_ylabel('Población')
-axs[0].set_title('SIR con control óptimo (escala libre)')
-axs[0].legend()
-# Escala [0,1]
-axs[1].plot(t, S, label='Susceptibles')
-axs[1].plot(t, I, label='Infectados')
-axs[1].plot(t, R, label='Recuperados')
-axs[1].plot(t[:-1], u, '--', label='Control óptimo')
-axs[1].axvspan(inicio_control, inicio_control + 7, alpha=0.2, color='gray')
-axs[1].set_ylim(0, 1)
-axs[1].set_xlabel('Días')
-axs[1].set_ylabel('Población')
-axs[1].set_title('SIR con control óptimo (limitado a [0,1])')
-axs[1].legend()
+plt.figure(figsize = (12,6))
+plt.plot(t, S, label='Susceptibles')
+plt.plot(t, I, label='Infectados')
+plt.plot(t, R, label='Recuperados')
+plt.plot(t[:-1], u, '--', label='Control óptimo')
+plt.axvspan(inicio_control, inicio_control + 7, alpha=0.2, color='gray', label='7 días control')
+plt.ylabel('Población')
+plt.title('SIR con control óptimo (escala libre)')
+plt.legend()
+plt.show()
