@@ -1,0 +1,181 @@
+import matplotlib.pyplot as plt
+from numba import njit
+import pandas as pd
+import numpy as np
+import random
+import time
+import math
+
+
+tiempo_inicial = time.time()
+
+# Función del modelo SIR con control no lineal
+def SIR_control(S, I, R, u):
+    beta_eff = delta_beta * (K / (K + u))
+    dS = -beta_eff * S * I
+    dI = beta_eff * S * I - delta_gamma * I
+    dR = delta_gamma * I
+    return dS, dI, dR
+
+# Funciones de coestados
+def coestados(S, I, R, lambdaS, lambdaI, lambdaR, u):
+    beta_eff = delta_beta * K / (K + u)
+    d_lambdaS = beta_eff * I * (lambdaS - lambdaI)
+    d_lambdaI = -C_I + beta_eff * S * (lambdaS - lambdaI) + delta_gamma * (lambdaI - lambdaR)
+    d_lambdaR = 0
+    return d_lambdaS, d_lambdaI, d_lambdaR
+
+# Condición de optimalidad (resolviendo la ecuación cúbica numéricamente)
+@njit
+def optimalidad(S, I, lamS, lamI):
+    # 1) Calcula Cc
+    Cc = (delta_beta * S * I * K * (lamS - lamI)) / (2.0 * C_u)
+    # Si Cc<=0, no hay raíz positiva
+    if Cc <= 0:
+        return 0.0
+
+    # 2) Coeficientes de la cúbica u^3 + 2K u^2 + K^2 u - Cc = 0
+    a = 2.0 * K
+    b = K * K
+    # término independiente de la cúbica monica: -Cc
+    c = -Cc
+
+    # 3) Depresión a t^3 + P t + Q = 0 con u = t - a/3
+    P = b - (a*a)/3.0
+    Q = (2.0 * a**3)/27.0 - (a*b)/3.0 + c
+    D = (Q/2.0)**2 + (P/3.0)**3
+
+    if D >= 0.0:
+        # Discriminante >=0: una raíz real
+        sqrtD = math.sqrt(D)
+        A = math.copysign(abs(-Q/2.0 + sqrtD)**(1/3.0), -Q/2.0 + sqrtD)
+        B = math.copysign(abs(-Q/2.0 - sqrtD)**(1/3.0), -Q/2.0 - sqrtD)
+        t = A + B
+        u = t - a/3.0
+        return u if u >= 0.0 else 0.0
+
+    else:
+        # Tres raíces reales: elige la mínima no negativa
+        r = math.sqrt(-(P**3) / 27.0)
+        phi = math.acos(-Q / (2.0 * r))
+        rc = r**(1/3.0)
+
+        t1 =  2.0*rc*math.cos(    phi/3.0) - a/3.0
+        t2 =  2.0*rc*math.cos((phi + 2*math.pi)/3.0) - a/3.0
+        t3 =  2.0*rc*math.cos((phi + 4*math.pi)/3.0) - a/3.0
+
+        # Filtra y devuelve la menor ≥0
+        candidates = [t for t in (t1, t2, t3) if t >= 0.0]
+        return min(candidates) if candidates else 0.0
+
+# Parámetros del modelo
+C_I = 10.0
+C_u = 1.0
+K = 1.0
+
+T_total = 60
+dt = 0.5
+N = int(T_total / dt)
+
+# Inicio bucle
+rows = []
+sistem = []
+for _ in range(1):
+    delta_beta  = random.uniform(0.1, 1.0)
+    delta_gamma = random.uniform(0.07, 0.5)
+    delta_S0    = random.uniform(0.1, 1.0)
+    delta_I0    = 1 - delta_S0
+    delta_R0    = 0
+    
+    
+    # Parámetros del horizonte errante
+    inicio_control = 3
+    duracion_control = T_total - inicio_control
+    fin_control = inicio_control + duracion_control
+    N_H = int(duracion_control / dt)
+
+    # Iniciar condiciones generales
+    S, I, R, u = [delta_S0], [delta_I0], [delta_R0], []
+    I_semanal, u_semanal, T_semanal = [], [], []
+
+    for t_step in range(N):
+      tiempo_actual = t_step * dt
+      S_ini, I_ini, R_ini = S[-1], I[-1], R[-1]
+
+      if (inicio_control <= tiempo_actual < fin_control): # Condicion para aplicar el control en un intervalo dado
+        S_h = np.zeros(N_H)
+        I_h = np.zeros(N_H)
+        R_h = np.zeros(N_H)
+        u_h = np.ones(N_H)*0.5
+        lambdaS = np.zeros(N_H)
+        lambdaI = np.zeros(N_H)
+        lambdaR = np.zeros(N_H)
+
+        lambdaS[-1], lambdaI[-1], lambdaR[-1] = 0, 10, 0
+        S_h[0], I_h[0], R_h[0] = S_ini, I_ini, R_ini # Inicia desde la ultima condicion global añadida
+
+        for _ in range(30):
+          for i in range(N_H - 1):
+            dS, dI, dR = SIR_control(S_h[i], I_h[i], R_h[i], u_h[i])
+            S_h[i+1] = S_h[i] + dt * dS
+            I_h[i+1] = I_h[i] + dt * dI
+            R_h[i+1] = R_h[i] + dt * dR
+
+          for i in reversed(range(N_H - 1)):
+            d_lambdaS, d_lambdaI, d_lambdaR = coestados(S_h[i], I_h[i], R_h[i], lambdaS[i+1], lambdaI[i+1], lambdaR[i+1], u_h[i])
+            lambdaS[i] = lambdaS[i+1] + dt * d_lambdaS
+            lambdaI[i] = lambdaI[i+1] + dt * d_lambdaI
+            lambdaR[i] = lambdaR[i+1] + dt * d_lambdaR
+
+          for i in range(N_H):
+            u_h[i] = optimalidad(S_h[i], I_h[i], lambdaS[i], lambdaI[i])
+
+        u_aplicado = u_h[0]
+      else:
+        u_aplicado = 0
+
+      # Actualización del sistema
+      dS, dI, dR = SIR_control(S_ini, I_ini, R_ini, u_aplicado) # Es funcion que aplica las condiciones dadas y actualiza el sistema general
+      S_next = S_ini + dt * dS
+      I_next = I_ini + dt * dI
+      R_next = R_ini + dt * dR
+
+      S.append(S_next)
+      I.append(I_next)
+      R.append(R_next)
+      u.append(u_aplicado)
+
+      if (inicio_control <= tiempo_actual < inicio_control+7.5): # Guardar la dinamica de la semana
+          u_semanal.append(u_aplicado)
+          I_semanal.append(I_ini)
+          T_semanal.append(tiempo_actual)
+
+    rows.append({
+        'beta':  delta_beta,
+        'gamma': delta_gamma,
+        'S0':    delta_S0,
+        'I0':    delta_I0,
+        'R0':    delta_R0,
+        'Dia inicial': inicio_control,
+        'I_semanal': I_semanal,
+        'u_semanal': u_semanal
+    })
+
+    sistem.append({
+        'S': S,
+        'I': I,
+        'R': R,
+        'u': u
+    })
+
+    
+# Convertimos la lista de diccionarios en un DataFrame
+df = pd.DataFrame(rows)
+df_sistem = pd.DataFrame(sistem)
+
+tiempo_final = time.time()
+print(f'Tiempo de ejecución: {tiempo_final - tiempo_inicial} segundos')
+print(f'Tiempo en minutos: {(tiempo_final - tiempo_inicial)/60} minutos')
+print()
+
+df
