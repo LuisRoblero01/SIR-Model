@@ -6,7 +6,6 @@ import random
 import time
 import math
 
-
 tiempo_inicial = time.time()
 
 # Función del modelo SIR con control no lineal
@@ -56,15 +55,21 @@ dt = 0.5
 N = int(T_total / dt)
 
 # Inicio bucle
-N_S = 500 # Número de simulaciones
+N_S = 100 # Número de simulaciones
 rows = []
 sistem = []
 for _ in range(N_S): 
-    delta_beta  = random.uniform(0.1, 1.5)
+    p = random.random()
+    if p < 0.7:
+        delta_S0 = random.uniform(0.9, 0.99)
+    elif p < 0.95:
+        delta_S0 = random.uniform(0.5, 0.9)
+    else:
+        delta_S0 = random.uniform(0.1, 0.5)
+    delta_I0 = 1 - delta_S0
+    delta_R0 = 0
+    delta_beta = random.uniform(0.1, 2.0)
     delta_gamma = random.uniform(0.05, 0.5)
-    delta_S0    = random.uniform(0.1, 1.0)
-    delta_I0    = 1 - delta_S0
-    delta_R0    = 0
     inicio_control = random.randint(0, 7)
     
     # Parámetros del horizonte errante
@@ -122,21 +127,32 @@ for _ in range(N_S):
       I.append(I_next)
       R.append(R_next)
       u.append(u_aplicado)
-
-      if (inicio_control <= tiempo_actual < inicio_control+8): # Guardar la dinamica de la semana
+        
+      # Condiciones para guardar la data
+      if (inicio_control <= tiempo_actual < inicio_control+8): # Guardar la dinamica de la semana 1
           u_entrada.append(u_aplicado)
           I_entrada.append(I_ini)
           T_entrada.append(tiempo_actual)
-      if (inicio_control+8 <= tiempo_actual < inicio_control + 16):
+      if (inicio_control+8 <= tiempo_actual < inicio_control + 16): # Guardar la dinámica de la semana 2
           u_pronostico.append(u_aplicado)
           I_pronostico.append(I_ini)
           T_pronostico.append(tiempo_actual)
+          
+      dia_pico = np.argmax(I) * dt
+      if (inicio_control <= dia_pico - 1):
+          estado = 'pre-pico'
+      if (dia_pico - 1 <= inicio_control < dia_pico + 1):
+          estado = 'durante_pico'
+      if (inicio_control >= dia_pico + 1):
+          estado = 'post-pico'
+          
 
     rows.append({
-        'beta':  delta_beta,
+        'beta': delta_beta,
         'gamma': delta_gamma,
-        'S0':    delta_S0,
-        'I0':    delta_I0,
+        'S0': delta_S0,
+        'I0': delta_I0,
+        'Estado_pico': estado,
         'T_entrada': T_entrada,
         'I_entrada': I_entrada,
         'u_entrada': u_entrada,
@@ -163,5 +179,5 @@ print(f'Tiempo en minutos: {(tiempo_final - tiempo_inicial)/60} minutos')
 print()
 
 # Guardar DataFrame
-df.to_csv('simulaciones_SIR_500.csv', index = False, encoding = 'utf-8')
+#df.to_csv('simulaciones_SIR_V3_20000.csv', index = False, encoding = 'utf-8')
 df
