@@ -1,0 +1,66 @@
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import Dense, LSTM, Conv1D, Input, LayerNormalization, Dropout, GaussianNoise, Concatenate
+
+# Limpieza de sesión
+tf.keras.backend.clear_session()
+
+# Entrada
+INPUT_SHAPE = (14, 1)
+input_layer = Input(INPUT_SHAPE, name='Input_layer')
+
+# Conv1D
+x = Conv1D(264, 3, activation='relu', padding='same', name='Conv1D_1')(input_layer)
+x = LayerNormalization(name='LN_1')(x)
+x = Dropout(0.3, name='DO_1')(x)
+
+x = Conv1D(128, 3, activation='relu', padding='same', name='Conv1D_2')(x)
+x = LayerNormalization(name='LN_21')(x)
+x = Dropout(0.3, name='DO_2')(x)
+
+# LSTM
+x = LSTM(128, dropout=0.3, return_sequences=True, name='LSTM_4')(x)
+x = LayerNormalization(name='LayerNormalization_4')(x)
+
+x = LSTM(64, dropout=0.3, return_sequences=True, name='LSTM_1')(x)
+x = LayerNormalization(name='LayerNormalization_1')(x)
+
+x = LSTM(32, dropout=0.3, return_sequences=True, name='LSTM_2')(x)
+x = LayerNormalization(name='LN_2')(x)
+
+x = LSTM(16, dropout=0.3, return_sequences=True, name='LSTM_3')(x)
+x = LayerNormalization(name='LN_3')(x)
+
+# Salida
+I_out = Dense(1, activation='sigmoid', name='I_out')(x)
+u_out = Dense(1, activation='sigmoid', name='u_out')(x)
+
+# Modelo
+model = Model(input_layer, [I_out, u_out])  
+
+# Funciones de perdida
+def tv_loss_u(y_true, y_pred):
+    diffs = y_pred[:, 1:, :] - y_pred[:, :-1, :]
+    return tf.reduce_mean(tf.abs(diffs))
+
+def deriv_loss_I(y_true, y_pred):
+    d_true = y_true[:, 1:, :] - y_true[:, :-1, :]
+    d_pred = y_pred[:, 1:, :] - y_pred[:, :-1, :]
+    return tf.reduce_mean(tf.square(d_true - d_pred))
+
+def loss_I(y_true, y_pred):
+    return tf.keras.losses.mse(y_true, y_pred) + 0.2*deriv_loss_I(y_true, y_pred)
+
+def loss_u(y_true, y_pred):
+    return tf.keras.losses.mse(y_true, y_pred) + 0.05*tv_loss_u(y_true, y_pred)
+
+model.compile(
+    optimizer=Adam(1e-3),
+    loss=[loss_I, loss_u],               
+    loss_weights=[1.0, 1.0],             
+    metrics=[['mae'], ['mae']]          
+)
+
+model.summary()
